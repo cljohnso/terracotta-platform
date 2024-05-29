@@ -80,7 +80,7 @@ public class VotingGroup implements AutoCloseable {
     this.sharedExecutor = Executors.newScheduledThreadPool(hostPorts.length);
     this.voter = voterThread(connectionProps, factory, hostPorts);
   }
-  
+
   public VoterStatus start() {
     this.voter.start();
     return status;
@@ -172,7 +172,7 @@ public class VotingGroup implements AutoCloseable {
       futures.forEach(f -> f.cancel(true));
     }
   }
-  
+
   private void addClientVoterNode(ClientVoterManager mgr, Properties connectionProps) {
     ClientVoterThread thread = new ClientVoterThread(mgr, id, sharedExecutor, connectionProps);
     ClientVoterThread former = nodes.put(mgr.getTargetHostPort(), thread);
@@ -196,15 +196,15 @@ public class VotingGroup implements AutoCloseable {
       LOGGER.info("Unexcepted exception.  Unable to register with target {}", mgr.getTargetHostPort(), c);
     }
   }
-  
+
   private synchronized void setVoteOwner(ClientVoterManager mgr) {
     this.voteOwner = mgr;
   }
-   
+
   private synchronized ClientVoterManager getVoteOwner() {
     return this.voteOwner;
   }
-  
+
   private synchronized void handleVoteRequest(ClientVoterManager mgr) {
     try {
       if (voteOwner == null) {
@@ -242,7 +242,7 @@ public class VotingGroup implements AutoCloseable {
       fireVotingListeners(mgr.getTargetHostPort());
     }
   }
-  
+
   private void reset() {
     for (ClientVoterThread t : nodes.values()) {
       t.close();
@@ -253,18 +253,27 @@ public class VotingGroup implements AutoCloseable {
 
   public void stop() {
     LOGGER.info("Stopping {}", this);
-    reset();
-    sharedExecutor.shutdown();
+    boolean interrupted = Thread.interrupted();
     try {
-      sharedExecutor.awaitTermination(30, TimeUnit.SECONDS);
-    } catch (InterruptedException ie) {
-      LOGGER.info("shutdown interrupted", ie);
-    }
-    this.voter.interrupt();
-    try {
-      this.voter.join();
-    } catch (InterruptedException ie) {
-      LOGGER.info("interrupted in stop", ie);
+      reset();
+      sharedExecutor.shutdown();
+      try {
+        sharedExecutor.awaitTermination(30, TimeUnit.SECONDS);
+      } catch (InterruptedException ie) {
+        LOGGER.info("shutdown interrupted", ie);
+        interrupted = true;
+      }
+      this.voter.interrupt();
+      try {
+        this.voter.join();
+      } catch (InterruptedException ie) {
+        LOGGER.info("interrupted in stop", ie);
+        interrupted = true;
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
@@ -329,7 +338,7 @@ public class VotingGroup implements AutoCloseable {
       Thread.currentThread().interrupt();
     }
   }
-  
+
   private void notifySleepTimer() {
     synchronized (pollingSleepTimer) {
       pollingSleepTimer[0] = true;
@@ -346,17 +355,17 @@ public class VotingGroup implements AutoCloseable {
   public String toString() {
     return "VotingGroup{" + nodes.keySet() + "}";
   }
-  
+
   // Below is all cruft for testing help
   private final List<Consumer<String>> votingListeners = new CopyOnWriteArrayList<>();
   private final CompletableFuture<?> bootstrapped = new CompletableFuture<>();
   private CompletableFuture<?> pollingFuture = new CompletableFuture<>();
   private String[] targets;
-  
+
   public void addVotingListener(Consumer<String> voter) {
     votingListeners.add(voter);
   }
-  
+
   private void fireVotingListeners(String voter) {
     votingListeners.forEach(c->c.accept(voter));
   }
@@ -368,13 +377,13 @@ public class VotingGroup implements AutoCloseable {
   public int countConnectedServers() {
     return nodes.size();
   }
-  
+
   private synchronized CompletableFuture<?> refreshPollingFuture() {
     pollingFuture = new CompletableFuture<>();
     notifyAll();
     return pollingFuture;
   }
-  
+
   private synchronized CompletableFuture<?> waitForRefresh() {
     CompletableFuture<?> current = pollingFuture;
     try {
@@ -384,22 +393,23 @@ public class VotingGroup implements AutoCloseable {
       }
       return pollingFuture;
     } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
       throw new RuntimeException(ie);
     }
   }
-  
+
   public CompletableFuture<?> forceTopologyUpdate() {
     return waitForRefresh();
   }
-    
+
   private synchronized void setTargets(String[] nodes) {
     targets = nodes;
   }
-  
+
   public synchronized Set<String> getExistingTopology() {
     return new HashSet<>(Arrays.asList(targets));
   }
-  
+
   private final VoterStatus status = new VoterStatus() {
     @Override
     public boolean isActive() {
